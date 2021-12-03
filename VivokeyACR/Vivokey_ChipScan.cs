@@ -4,6 +4,7 @@ using PCSC;
 using PCSC.Iso7816;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Text;
@@ -18,6 +19,15 @@ namespace Vivokey_ChipScan
         private const string pcdChallengeEndpoint = "pcd-challenge";
         private const string checkResponseEndpoint = "check-response";
 
+        // AID's of vivokey implants / devices.
+        private Dictionary<string, List<Tuple<TagType, byte[]>>> AIDs = new Dictionary<string, List<Tuple<TagType, byte[]>>>
+        {
+            { "spark2AID1", new List<Tuple<TagType, byte[]>> { new Tuple<TagType, byte[]>( TagType.Spark2, new byte[] { 0xD2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01 }) } },
+            { "spark2AID2", new List<Tuple<TagType, byte[]>> { new Tuple<TagType, byte[]>( TagType.Spark2, new byte[] { 0xD2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x00 }) } },
+            { "apexAID1", new List<Tuple<TagType, byte[]>> { new Tuple<TagType, byte[]>( TagType.Apex, new byte[] { 0xA0, 0x00, 0x00, 0x07, 0x47, 0x00, 0xCC, 0x68, 0xE8, 0x8C, 0x01 }) } }
+        };
+
+
         ContextFactory _contextFactory; // PCSC context factory (smartcard readers).
 
         // Variables for the class.
@@ -28,17 +38,20 @@ namespace Vivokey_ChipScan
         private string PICCresponse;
         private string PCDchallenge;
         private string PCDresponse;
+        
 
         // Tag type enum Spark1 not used as acr122u cannot use it.
-        private enum TagType
+        public enum TagType
         {
             Spark2,
-            Apex
+            Apex,
+            NotVK
         }
 
         // Variables the caller can access.
         public string result;
         public string resultData;
+        public TagType tagType;
 
         // This is the class constructor, this code is called when we create an new instance.
         public ChipScan(string apikey, string reader, ContextFactory contextFactory)
@@ -46,6 +59,8 @@ namespace Vivokey_ChipScan
             _apikey = apikey; // Set our api key to the one fed in.
             _reader = reader; // Set reader name from the one fed in.
             _contextFactory = contextFactory; // Smartcard reader context.
+
+
         }
 
         public bool ChipScanned()
@@ -54,9 +69,18 @@ namespace Vivokey_ChipScan
             GetPICCchallenge();
             GetUID();
             GetPCDChallenge();
-            GetPCDResponse();
-            SendPCDResponse();
-            CheckResult();
+
+            if (tagType != TagType.NotVK)
+            {
+                GetPCDResponse();
+                SendPCDResponse();
+                CheckResult();
+            } 
+            else
+            {
+                return false;
+            }
+            
 
             return true;
         }
@@ -119,29 +143,84 @@ namespace Vivokey_ChipScan
             {
                 using (var isoReader = new IsoReader(ctx, _reader, SCardShareMode.Shared, SCardProtocol.Any, false))
                 {
-
-                    var selectFile = new CommandApdu(IsoCase.Case3Short, SCardProtocol.Any)
+                    foreach (KeyValuePair<string, List<Tuple<TagType, byte[]>>> aid in AIDs) 
                     {
-                        CLA = 0x00,
-                        INS = 0xA4,
-                        P1 = 0x04,
-                        P2 = 0x0C,
-                        Data = new byte[] { 0xD2, 0x76, 0x00, 0x00, 0x85, 0x01, 0x01 }
+                        var tag = aid.Value[0].Item1;
+                        var data = aid.Value[0].Item2;
+
+                        var selectFile = new CommandApdu(IsoCase.Case3Short, SCardProtocol.Any)
+                        {
+                            CLA = 0x00,
+                            INS = 0xA4,
+                            P1 = 0x04,
+                            P2 = 0x0C,
+                            Data = data
+                        };
+
+                        try
+                        {
+                            Response slecectFileResponse = isoReader.Transmit(selectFile);
+
+                            if (slecectFileResponse.SW1 == 0x90 && slecectFileResponse.SW2 == 0x00)
+                            {
+                                tagType = tag;
+                                break;
+                            }
+                            else if (slecectFileResponse.SW1 == 0x90 && slecectFileResponse.SW2 == 0xAF)
+                            {
+                                tagType = tag;
+                                break;
+                            }
+                            else
+                            {
+                                tagType = TagType.NotVK;
+                            }
+                        }
+                        catch (Exception)
+                        {
+
+                            tagType = TagType.NotVK;
+                        }
                     };
-
-                    var slecectFileResponse = isoReader.Transmit(selectFile);
-
-                    var authenticateFirstPart1 = new CommandApdu(IsoCase.Case4Short, isoReader.ActiveProtocol)
+                    
+                    if (tagType != TagType.NotVK)
                     {
-                        CLA = 0x90,
-                        INS = 0x71,
-                        P1 = 0x00,
-                        P2 = 0x00,
-                        Data = new byte[] { 0x02, 0x00 },
-                        Le = 0x00
-                    };
+                        CommandApdu authenticateFirstPart1;
 
-                    PCDchallenge = BitConverter.ToString(isoReader.Transmit(authenticateFirstPart1).GetData()).Replace("-", string.Empty);
+                        switch (tagType)
+                        {
+                            // If spark2 and default (so always defined)
+                            case TagType.Spark2:
+                            default:
+                                authenticateFirstPart1 = new CommandApdu(IsoCase.Case4Short, isoReader.ActiveProtocol)
+                                {
+                                    CLA = 0x90,
+                                    INS = 0x71,
+                                    P1 = 0x00,
+                                    P2 = 0x00,
+                                    Data = new byte[] { 0x02, 0x00 },
+                                    Le = 0x00
+                                };
+                                break;
+
+                            // If apex.
+                            case TagType.Apex:
+                                authenticateFirstPart1 = new CommandApdu(IsoCase.Case3Short, isoReader.ActiveProtocol)
+                                {
+                                    CLA = 0x00,
+                                    INS = 0xA9,
+                                    P1 = 0xA3,
+                                    P2 = 0x00,
+                                    Le = 0x00
+                                };
+                                break;
+
+                            
+                        }
+
+                        PCDchallenge = BitConverter.ToString(isoReader.Transmit(authenticateFirstPart1).GetData()).Replace("-", string.Empty);
+                    }
+                    
                 }
             }
         }
@@ -273,5 +352,6 @@ namespace Vivokey_ChipScan
             result = "";
             resultData = "";
         }
+
     }
 }

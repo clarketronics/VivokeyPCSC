@@ -13,6 +13,7 @@ namespace VivokeyACR
         ContextFactory contextFactory = new ContextFactory();
         MonitorFactory monitorFactory = new MonitorFactory(new ContextFactory());
         ISCardMonitor monitor;
+        bool result;
 
         ChipScan chipScan;
         Form form1;
@@ -27,7 +28,7 @@ namespace VivokeyACR
 
         private void Monitor_CardInserted(object sender, CardStatusEventArgs e)
         {
-            chipScan.ChipScanned();
+            result = chipScan.ChipScanned();
 
             form1.BeginInvoke((MethodInvoker)delegate ()
             {
@@ -40,7 +41,7 @@ namespace VivokeyACR
         {
             RefreshReaders();
             RefreshLabels();
-            chipScan = new ChipScan(apikey, comboBox1.Text, contextFactory);
+            chipScan = new ChipScan(apikey, readersComboBox.Text, contextFactory);
         }
 
         private void refreshButton_Click(object sender, EventArgs e)
@@ -52,7 +53,7 @@ namespace VivokeyACR
         {
             using (var ctx = contextFactory.Establish(SCardScope.System))
             {
-                using (var isoReader = new IsoReader(ctx, comboBox1.Text, SCardShareMode.Exclusive, SCardProtocol.Any, false))
+                using (var isoReader = new IsoReader(ctx, readersComboBox.Text, SCardShareMode.Exclusive, SCardProtocol.Any, false))
                 {
 
                     var apdu = new CommandApdu(IsoCase.Case4Short, isoReader.ActiveProtocol)
@@ -74,31 +75,41 @@ namespace VivokeyACR
         {
             using (var conText = contextFactory.Establish(SCardScope.System))
             {
-                comboBox1.Items.Clear();
+                readersComboBox.Items.Clear();
                 var readerNames = conText.GetReaders();
                 foreach (var readerName in readerNames)
                 {
-                    comboBox1.Items.Add(readerName);
-                    comboBox1.SelectedIndex = 0;
+                    readersComboBox.Items.Add(readerName);
+                    readersComboBox.SelectedIndex = 0;
                 }
             }
         }
        
         public void RefreshLabels()
         {
-            label6.Text = "check-result: ";
+            label5.Text = "device type: ";
+            label6.Text = "check result: ";
             label7.Text = "result data: ";
         }
 
         private void ResultsUpdated()
         {
-            label6.Text = label6.Text + chipScan.result;
-            label7.Text = label7.Text + chipScan.resultData;
+            if (result)
+            {
+                label5.Text = label5.Text + chipScan.tagType;
+                label6.Text = label6.Text + chipScan.result;
+                label7.Text = label7.Text + chipScan.resultData;
+            }
+            else
+            {
+                label6.Text = label6.Text + "Presented device is not a Vivokey device.";
+            }
+            
         }
 
-        private void comboBox1_SelectedIndexChanged(object sender, EventArgs e)
+        private void readersComboBox_SelectedIndexChanged(object sender, EventArgs e)
         {
-            monitor.Start(comboBox1.Text);
+            monitor.Start(readersComboBox.Text);
         }
     }
 }
