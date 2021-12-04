@@ -74,7 +74,15 @@ namespace Vivokey_ChipScan
             {
                 GetPCDResponse();
                 SendPCDResponse();
-                CheckResult();
+
+                if (PICCchallenge != "")
+                {
+                    CheckResult();
+                }
+                else
+                {
+                    return false;
+                }
             } 
             else
             {
@@ -263,18 +271,94 @@ namespace Vivokey_ChipScan
             {
                 using (var isoReader = new IsoReader(ctx, _reader, SCardShareMode.Shared, SCardProtocol.Any, false))
                 {
-
-                    var authenticateFirstPart2 = new CommandApdu(IsoCase.Case4Short, isoReader.ActiveProtocol)
+                    CommandApdu authenticateFirstPart2;
+                    CommandApdu issuer;
+                    switch (tagType)
                     {
-                        CLA = 0x90,
-                        INS = 0xaf,
-                        P1 = 0x00,
-                        P2 = 0x00,
-                        Data = StringToHex(PCDresponse),
-                        Le = 0x00
-                    };
+                        // If spark2.
+                        case TagType.Spark2:
+                            authenticateFirstPart2 = new CommandApdu(IsoCase.Case4Short, isoReader.ActiveProtocol)
+                            {
+                                CLA = 0x90,
+                                INS = 0xaf,
+                                P1 = 0x00,
+                                P2 = 0x00,
+                                Data = StringToHex(PCDresponse),
+                                Le = 0x00
+                            };
 
-                    PICCresponse = BitConverter.ToString(isoReader.Transmit(authenticateFirstPart2).GetData()).Replace("-", string.Empty);
+                            Response authPart2 = isoReader.Transmit(authenticateFirstPart2);
+
+                            if (authPart2.SW1 == 0x91 && authPart2.SW2 == 0x00)
+                            {
+                                PICCresponse = BitConverter.ToString(authPart2.GetData()).Replace("-", string.Empty);
+                            } 
+                            else
+                            {
+                                PICCresponse = "";
+                            }
+
+                            break;
+
+                        // If apexand default (so always defined).
+                        case TagType.Apex:
+                            byte[] response = StringToHex(PCDresponse);
+                            byte[] challResponse = new byte[16];
+                            int sizeOfIssuerData = response.Length - 16;
+                            byte[] issuerData = new byte[sizeOfIssuerData];
+
+                            for (int i = 16; i < sizeOfIssuerData; i++)
+                            {
+                                issuerData[i] = response[i];
+                            }
+
+                            for (int i = 0; i < 16; i++)
+                            {
+                                challResponse[i] = response[i];
+                            }
+
+                            issuer = new CommandApdu(IsoCase.Case3Short, isoReader.ActiveProtocol)
+                            {
+                                CLA = 0x90,
+                                INS = 0xaf,
+                                P1 = 0x00,
+                                P2 = 0x00,
+                                Data = issuerData
+                            };
+
+                            var issuerResponse = isoReader.Transmit(issuer);
+
+                            if (issuerResponse.SW1 == 0x90 && issuerResponse.SW2 == 0x00)
+                            {
+                                authenticateFirstPart2 = new CommandApdu(IsoCase.Case4Short, isoReader.ActiveProtocol)
+                                {
+                                    CLA = 0x90,
+                                    INS = 0xaf,
+                                    P1 = 0x00,
+                                    P2 = 0x00,
+                                    Data = challResponse,
+                                    Le = 0x00
+                                };
+
+                                var authPart2Response = isoReader.Transmit(authenticateFirstPart2);
+
+                                if (authPart2Response.SW1 == 0x90 && authPart2Response.SW2 == 0x00)
+                                {
+                                    PICCresponse = BitConverter.ToString(authPart2Response.GetData()).Replace("-", string.Empty);
+                                }
+                                else
+                                {
+                                    PICCresponse = "";
+                                    break;
+                                }
+                            }
+                            else
+                            {
+                                PICCresponse = "";
+                            }
+                            break;
+                    };                              
+                    
                 }
             }
         }
